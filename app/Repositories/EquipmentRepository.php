@@ -15,6 +15,8 @@ class EquipmentRepository
 
     private const SCHEME_CRIS_ID = 'https://w3id.org/cerif/vocab/IdentifierTypes#CRISID';
 
+    private const VOCAB_OCDE_FORD = 'https://purl.org/pe-repo/ocde/ford';
+
     private const CTI_TERMS_SCHEME = 'https://purl.org/pe-repo/concytec/terminos';
 
     public function countAll(?string $from = null, ?string $until = null): int
@@ -67,7 +69,7 @@ class EquipmentRepository
 
         $dateFilter = CerifFormatter::buildDateFilter($from, $until, 'gi.updated_at');
 
-        $query = '
+        $query = "
             SELECT
                 gi.id,
                 gi.codigo,
@@ -80,11 +82,26 @@ class EquipmentRepository
                 gi.valor_estimado,
                 gi.area_mt2,
                 gi.contacto,
+                gp.ocde_value,
                 gi.updated_at
             FROM Grupo_infraestructura gi
             LEFT JOIN Grupo g ON gi.grupo_id = g.id
+            LEFT JOIN (
+                SELECT
+                    p.grupo_id,
+                    MIN(COALESCE(NULLIF(TRIM(o.codigo), ''), NULLIF(TRIM(o.linea), ''))) as ocde_value
+                FROM Proyecto p
+                LEFT JOIN Ocde o ON p.ocde_id = o.id
+                WHERE p.grupo_id IS NOT NULL
+                  AND p.estado >= 1
+                  AND (
+                    (o.codigo IS NOT NULL AND TRIM(o.codigo) <> '')
+                    OR (o.linea IS NOT NULL AND TRIM(o.linea) <> '')
+                  )
+                GROUP BY p.grupo_id
+            ) gp ON gp.grupo_id = gi.grupo_id
             WHERE gi.id IS NOT NULL
-        ';
+        ";
 
         if ($dateFilter['clause']) {
             $query .= ' AND '.$dateFilter['clause'];
@@ -102,7 +119,7 @@ class EquipmentRepository
     public function findById(string|int $id): ?array
     {
         $rows = DB::select(
-            '
+            "
                 SELECT
                     gi.id,
                     gi.codigo,
@@ -115,12 +132,27 @@ class EquipmentRepository
                     gi.valor_estimado,
                     gi.area_mt2,
                     gi.contacto,
+                    gp.ocde_value,
                     gi.updated_at
                 FROM Grupo_infraestructura gi
                 LEFT JOIN Grupo g ON gi.grupo_id = g.id
+                LEFT JOIN (
+                    SELECT
+                        p.grupo_id,
+                        MIN(COALESCE(NULLIF(TRIM(o.codigo), ''), NULLIF(TRIM(o.linea), ''))) as ocde_value
+                    FROM Proyecto p
+                    LEFT JOIN Ocde o ON p.ocde_id = o.id
+                    WHERE p.grupo_id IS NOT NULL
+                      AND p.estado >= 1
+                      AND (
+                        (o.codigo IS NOT NULL AND TRIM(o.codigo) <> '')
+                        OR (o.linea IS NOT NULL AND TRIM(o.linea) <> '')
+                      )
+                    GROUP BY p.grupo_id
+                ) gp ON gp.grupo_id = gi.grupo_id
                 WHERE gi.id = ?
                 LIMIT 1
-            ',
+            ",
             [$id]
         );
 
@@ -188,6 +220,13 @@ class EquipmentRepository
                 'value' => (float) $row['area_mt2'],
                 'unit' => 'm2',
             ];
+        }
+
+        if (! empty($row['ocde_value'])) {
+            $equipment['subjects'] = [[
+                'scheme' => self::VOCAB_OCDE_FORD,
+                'value' => self::VOCAB_OCDE_FORD.'#'.$row['ocde_value'],
+            ]];
         }
 
         return $equipment;

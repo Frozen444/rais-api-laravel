@@ -4,6 +4,12 @@ namespace App\Services;
 
 class CerifFormatter
 {
+    public const ORGUNIT_TYPE_FACULTAD = 'https://purl.org/pe-repo/concytec/terminos#facultad';
+
+    public const ORGUNIT_TYPE_INSTITUTO = 'https://purl.org/pe-repo/concytec/terminos#instituto';
+
+    public const ORGUNIT_TYPE_GRUPO_INVESTIGACION = 'https://purl.org/pe-repo/concytec/terminos#grupoInvestigacion';
+
     public const PUBLICATION_TYPE_MAP = [
         'articulo' => 'http://purl.org/coar/resource_type/c_6501',
         'libro' => 'http://purl.org/coar/resource_type/c_2f33',

@@ -51,6 +51,20 @@ class PatenteRepository
         return (int) ($rows[0]->total ?? 0);
     }
 
+    public function countDeleted(?string $from = null, ?string $until = null): int
+    {
+        $dateFilter = CerifFormatter::buildDateFilter($from, $until, 'p.updated_at');
+        $query = 'SELECT COUNT(*) as total FROM Patente p WHERE p.estado = 0';
+
+        if ($dateFilter['clause']) {
+            $query .= ' AND '.$dateFilter['clause'];
+        }
+
+        $rows = DB::select($query, $dateFilter['params']);
+
+        return (int) ($rows[0]->total ?? 0);
+    }
+
     public function getIdentifiers(array $filters): array
     {
         $offset = (int) ($filters['offset'] ?? 0);
@@ -74,6 +88,34 @@ class PatenteRepository
                 'identifier' => CerifFormatter::toOAIIdentifier(self::ENTITY_TYPE, $row->id),
                 'datestamp' => CerifFormatter::toISO8601($row->updated_at) ?? self::FALLBACK_DATE,
                 'setSpec' => 'patents',
+            ];
+        }, $rows);
+    }
+
+    public function getDeletedIdentifiers(array $filters): array
+    {
+        $offset = (int) ($filters['offset'] ?? 0);
+        $limit = (int) ($filters['limit'] ?? 100);
+        $from = $filters['from'] ?? null;
+        $until = $filters['until'] ?? null;
+
+        $dateFilter = CerifFormatter::buildDateFilter($from, $until, 'p.updated_at');
+        $query = 'SELECT p.id, p.updated_at FROM Patente p WHERE p.estado = 0';
+
+        if ($dateFilter['clause']) {
+            $query .= ' AND '.$dateFilter['clause'];
+        }
+
+        $query .= ' ORDER BY p.id LIMIT ? OFFSET ?';
+        $params = [...$dateFilter['params'], $limit, $offset];
+        $rows = DB::select($query, $params);
+
+        return array_map(function ($row) {
+            return [
+                'identifier' => CerifFormatter::toOAIIdentifier(self::ENTITY_TYPE, $row->id),
+                'datestamp' => CerifFormatter::toISO8601($row->updated_at) ?? self::FALLBACK_DATE,
+                'setSpec' => 'patents',
+                'status' => 'deleted',
             ];
         }, $rows);
     }
@@ -128,6 +170,7 @@ class PatenteRepository
     {
         $inventors = $context['inventors'] ?? [];
         $holders = $context['holders'] ?? [];
+        $projectIds = $context['projectIds'] ?? [];
 
         $typeUri = CerifFormatter::PATENT_TYPE_MAP[$row['tipo'] ?? '']
             ?? CerifFormatter::PATENT_TYPE_MAP['default'];
@@ -228,6 +271,16 @@ class PatenteRepository
             $patent['holders'] = $holderItems;
         }
 
+        if (count($projectIds) > 0) {
+            $patent['originatesFrom'] = array_map(function ($projectId) {
+                return [
+                    'project' => [
+                        'id' => CerifFormatter::toCerifId('Projects', $projectId),
+                    ],
+                ];
+            }, $projectIds);
+        }
+
         $patent['issuer'] = [
             'orgUnit' => [
                 'id' => CerifFormatter::toCerifId('OrgUnits', 'INDECOPI'),
@@ -305,7 +358,59 @@ class PatenteRepository
         return [
             'inventors' => $mappedInventors,
             'holders' => array_map(fn ($row) => (array) $row, $holders),
+            'projectIds' => $this->getPatentProjectIds($patentId),
         ];
+    }
+
+    private function getPatentProjectIds(int $patentId): array
+    {
+        $projectIds = [];
+
+        try {
+            $directRows = DB::select(
+                '
+                    SELECT DISTINCT pp.proyecto_id
+                    FROM Patente_proyecto pp
+                    WHERE pp.patente_id = ?
+                      AND pp.proyecto_id IS NOT NULL
+                    ORDER BY pp.proyecto_id
+                ',
+                [$patentId]
+            );
+
+            foreach ($directRows as $row) {
+                if (! empty($row->proyecto_id)) {
+                    $projectIds[] = (int) $row->proyecto_id;
+                }
+            }
+        } catch (\Throwable) {
+        }
+
+        if (count($projectIds) === 0) {
+            $fallbackRows = DB::select(
+                '
+                    SELECT DISTINCT pi.proyecto_id
+                    FROM Patente_autor pa
+                    INNER JOIN Proyecto_integrante pi ON pa.investigador_id = pi.investigador_id
+                    INNER JOIN Proyecto p ON p.id = pi.proyecto_id
+                    WHERE pa.patente_id = ?
+                      AND pa.investigador_id IS NOT NULL
+                      AND IFNULL(pi.estado, 1) = 1
+                      AND p.estado >= 1
+                      AND pi.proyecto_id IS NOT NULL
+                    ORDER BY pi.proyecto_id
+                ',
+                [$patentId]
+            );
+
+            foreach ($fallbackRows as $row) {
+                if (! empty($row->proyecto_id)) {
+                    $projectIds[] = (int) $row->proyecto_id;
+                }
+            }
+        }
+
+        return array_values(array_unique($projectIds));
     }
 
     private function normalizeOrcid(string $orcid): string

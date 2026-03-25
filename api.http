@@ -1,0 +1,119 @@
+@baseUrl = http://127.0.0.1:8000
+@oaiUrl = {{baseUrl}}/oai
+@metadataPrefix = perucris-cerif
+@oaiDomain = perucris.concytec.gob.pe
+
+###
+# Salud de la API
+GET {{baseUrl}}/health
+
+###
+# Raiz informativa
+GET {{baseUrl}}/
+
+###
+# Verb: Identify
+GET {{oaiUrl}}?verb=Identify
+
+###
+# Verb: ListMetadataFormats
+GET {{oaiUrl}}?verb=ListMetadataFormats
+
+###
+# Verb: ListSets
+GET {{oaiUrl}}?verb=ListSets
+
+###
+# ListIdentifiers - persons
+GET {{oaiUrl}}?verb=ListIdentifiers&metadataPrefix={{metadataPrefix}}&set=persons
+
+###
+# ListIdentifiers - orgunits
+GET {{oaiUrl}}?verb=ListIdentifiers&metadataPrefix={{metadataPrefix}}&set=orgunits
+
+###
+# ListIdentifiers - publications
+GET {{oaiUrl}}?verb=ListIdentifiers&metadataPrefix={{metadataPrefix}}&set=publications
+
+###
+# ListIdentifiers - projects
+GET {{oaiUrl}}?verb=ListIdentifiers&metadataPrefix={{metadataPrefix}}&set=projects
+
+###
+# ListIdentifiers - patents
+GET {{oaiUrl}}?verb=ListIdentifiers&metadataPrefix={{metadataPrefix}}&set=patents
+
+###
+# ListIdentifiers - fundings
+GET {{oaiUrl}}?verb=ListIdentifiers&metadataPrefix={{metadataPrefix}}&set=fundings
+
+###
+# ListIdentifiers - equipments
+GET {{oaiUrl}}?verb=ListIdentifiers&metadataPrefix={{metadataPrefix}}&set=equipments
+
+###
+# ListRecords - persons
+GET {{oaiUrl}}?verb=ListRecords&metadataPrefix={{metadataPrefix}}&set=persons
+
+###
+# ListRecords - orgunits
+GET {{oaiUrl}}?verb=ListRecords&metadataPrefix={{metadataPrefix}}&set=orgunits
+
+###
+# ListRecords - publications
+GET {{oaiUrl}}?verb=ListRecords&metadataPrefix={{metadataPrefix}}&set=publications
+
+###
+# ListRecords - projects
+GET {{oaiUrl}}?verb=ListRecords&metadataPrefix={{metadataPrefix}}&set=projects
+
+###
+# ListRecords - patents
+GET {{oaiUrl}}?verb=ListRecords&metadataPrefix={{metadataPrefix}}&set=patents
+
+###
+# ListRecords - fundings
+GET {{oaiUrl}}?verb=ListRecords&metadataPrefix={{metadataPrefix}}&set=fundings
+
+###
+# ListRecords - equipments
+GET {{oaiUrl}}?verb=ListRecords&metadataPrefix={{metadataPrefix}}&set=equipments
+
+###
+# GetRecord - persons
+# Ajusta el identificador segun tu data real si no existe el id 1
+GET {{oaiUrl}}?verb=GetRecord&metadataPrefix={{metadataPrefix}}&identifier=oai:{{oaiDomain}}:Persons/1
+
+###
+# GetRecord - orgunits
+# Ejemplo con Facultad F1
+GET {{oaiUrl}}?verb=GetRecord&metadataPrefix={{metadataPrefix}}&identifier=oai:{{oaiDomain}}:OrgUnits/F1
+
+###
+# GetRecord - publications
+GET {{oaiUrl}}?verb=GetRecord&metadataPrefix={{metadataPrefix}}&identifier=oai:{{oaiDomain}}:Publications/1
+
+###
+# GetRecord - projects
+GET {{oaiUrl}}?verb=GetRecord&metadataPrefix={{metadataPrefix}}&identifier=oai:{{oaiDomain}}:Projects/1
+
+###
+# GetRecord - patents
+GET {{oaiUrl}}?verb=GetRecord&metadataPrefix={{metadataPrefix}}&identifier=oai:{{oaiDomain}}:Patents/1
+
+###
+# GetRecord - fundings
+# Funding usa id con prefijo P
+GET {{oaiUrl}}?verb=GetRecord&metadataPrefix={{metadataPrefix}}&identifier=oai:{{oaiDomain}}:Fundings/P1
+
+###
+# GetRecord - equipments
+GET {{oaiUrl}}?verb=GetRecord&metadataPrefix={{metadataPrefix}}&identifier=oai:{{oaiDomain}}:Equipments/1
+
+###
+# Error: verb invalido
+GET {{oaiUrl}}?verb=VerbInvalido
+
+###
+# Error: falta metadataPrefix
+GET {{oaiUrl}}?verb=ListRecords&set=projects

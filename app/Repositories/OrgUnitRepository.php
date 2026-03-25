@@ -9,13 +9,20 @@ class OrgUnitRepository
 {
     private const ENTITY_TYPE = 'OrgUnits';
 
+    private const FALLBACK_DATE = '2014-01-01T00:00:00Z';
+
     private const NAMESPACE_PERUCRIS_CERIF = 'https://purl.org/pe-repo/perucris/cerif';
 
     private const SCHEME_RUC = 'https://purl.org/pe-repo/concytec/terminos#ruc';
+
     private const SCHEME_ROR = 'https://ror.org';
+
     private const SCHEME_ISNI = 'https://isni.org';
+
     private const SCHEME_GRID = 'https://www.grid.ac';
+
     private const SCHEME_SCOPUS_AFFIL = 'http://purl.org/pe-repo/concytec/scopus/affiliationId';
+
     private const SCHEME_ORG_TYPE = 'https://purl.org/pe-repo/concytec/tipoOrganizacion';
 
     private const UNMSM_ROOT = [
@@ -55,6 +62,7 @@ class OrgUnitRepository
         $result = DB::select(
             'SELECT MIN(updated_at) as earliest FROM Grupo WHERE estado = 4'
         );
+
         return CerifFormatter::toISO8601($result[0]->earliest ?? 'now');
     }
 
@@ -73,17 +81,94 @@ class OrgUnitRepository
         $dateFilter = CerifFormatter::buildDateFilter($from, $until);
         $gruposQuery = 'SELECT COUNT(*) as total FROM Grupo WHERE estado = 4';
         if ($dateFilter['clause']) {
-            $gruposQuery .= ' AND ' . $dateFilter['clause'];
+            $gruposQuery .= ' AND '.$dateFilter['clause'];
         }
         $gruposResult = DB::select($gruposQuery, $dateFilter['params']);
 
         return 1 + (int) $facultadesResult[0]->total + (int) $institutosResult[0]->total + (int) $gruposResult[0]->total;
     }
 
+    public function countDeleted(?string $from = null, ?string $until = null): int
+    {
+        $institutosResult = DB::select('SELECT COUNT(*) as total FROM Instituto WHERE estado = 0');
+
+        $dateFilter = CerifFormatter::buildDateFilter($from, $until, 'g.updated_at');
+        $gruposQuery = 'SELECT COUNT(*) as total FROM Grupo g WHERE g.estado = 0';
+        if ($dateFilter['clause']) {
+            $gruposQuery .= ' AND '.$dateFilter['clause'];
+        }
+        $gruposResult = DB::select($gruposQuery, $dateFilter['params']);
+
+        return (int) $institutosResult[0]->total + (int) $gruposResult[0]->total;
+    }
+
     public function getIdentifiers(array $filters): array
     {
         $records = $this->findAll($filters);
-        return array_map(fn($r) => $r['header'], $records);
+
+        return array_map(fn ($r) => $r['header'], $records);
+    }
+
+    public function getDeletedIdentifiers(array $filters): array
+    {
+        $offset = (int) ($filters['offset'] ?? 0);
+        $limit = (int) ($filters['limit'] ?? 100);
+        $from = $filters['from'] ?? null;
+        $until = $filters['until'] ?? null;
+
+        if ($limit <= 0) {
+            return [];
+        }
+
+        $institutosCountRows = DB::select('SELECT COUNT(*) as total FROM Instituto WHERE estado = 0');
+        $institutosCount = (int) ($institutosCountRows[0]->total ?? 0);
+
+        $headers = [];
+        $remaining = $limit;
+
+        if ($offset < $institutosCount) {
+            $institutos = DB::select(
+                'SELECT id FROM Instituto WHERE estado = 0 ORDER BY id LIMIT ? OFFSET ?',
+                [$remaining, $offset]
+            );
+
+            foreach ($institutos as $instituto) {
+                $headers[] = [
+                    'identifier' => CerifFormatter::toOAIIdentifier(self::ENTITY_TYPE, 'I'.$instituto->id),
+                    'datestamp' => self::FALLBACK_DATE,
+                    'setSpec' => 'orgunits',
+                    'status' => 'deleted',
+                ];
+            }
+
+            $remaining -= count($institutos);
+            $groupOffset = 0;
+        } else {
+            $groupOffset = $offset - $institutosCount;
+        }
+
+        if ($remaining > 0) {
+            $dateFilter = CerifFormatter::buildDateFilter($from, $until, 'g.updated_at');
+
+            $gruposQuery = 'SELECT g.id, g.updated_at FROM Grupo g WHERE g.estado = 0';
+            if ($dateFilter['clause']) {
+                $gruposQuery .= ' AND '.$dateFilter['clause'];
+            }
+            $gruposQuery .= ' ORDER BY g.id LIMIT ? OFFSET ?';
+
+            $grupos = DB::select($gruposQuery, [...$dateFilter['params'], $remaining, $groupOffset]);
+
+            foreach ($grupos as $grupo) {
+                $headers[] = [
+                    'identifier' => CerifFormatter::toOAIIdentifier(self::ENTITY_TYPE, 'G'.$grupo->id),
+                    'datestamp' => CerifFormatter::toISO8601($grupo->updated_at ?? null) ?? self::FALLBACK_DATE,
+                    'setSpec' => 'orgunits',
+                    'status' => 'deleted',
+                ];
+            }
+        }
+
+        return $headers;
     }
 
     public function findAll(array $filters): array
@@ -119,14 +204,14 @@ class OrgUnitRepository
         }
 
         if ($remaining > 0) {
-            $institutos = DB::select("
+            $institutos = DB::select('
                 SELECT i.*, f.nombre as facultad_nombre
                 FROM Instituto i
                 LEFT JOIN Facultad f ON i.facultad_id = f.id
                 WHERE i.estado = 1
                 ORDER BY i.id
                 LIMIT ? OFFSET ?
-            ", [$remaining, max(0, $currentOffset)]);
+            ', [$remaining, max(0, $currentOffset)]);
 
             foreach ($institutos as $inst) {
                 $results[] = $this->buildInstitutoRecord((array) $inst);
@@ -137,14 +222,14 @@ class OrgUnitRepository
 
         if ($remaining > 0) {
             $dateFilter = CerifFormatter::buildDateFilter($from, $until);
-            $gruposQuery = "
+            $gruposQuery = '
                 SELECT g.*, f.nombre as facultad_nombre
                 FROM Grupo g
                 LEFT JOIN Facultad f ON g.facultad_id = f.id
                 WHERE g.estado = 4
-            ";
+            ';
             if ($dateFilter['clause']) {
-                $gruposQuery .= ' AND ' . $dateFilter['clause'];
+                $gruposQuery .= ' AND '.$dateFilter['clause'];
             }
             $gruposQuery .= ' ORDER BY g.id LIMIT ? OFFSET ?';
 
@@ -164,36 +249,39 @@ class OrgUnitRepository
         if (count($rows) === 0) {
             return null;
         }
+
         return $this->buildFacultadRecord((array) $rows[0]);
     }
 
     private function findInstitutoById(string $id): ?array
     {
-        $rows = DB::select("
+        $rows = DB::select('
             SELECT i.*, f.nombre as facultad_nombre
             FROM Instituto i
             LEFT JOIN Facultad f ON i.facultad_id = f.id
             WHERE i.id = ? AND i.estado = 1
-        ", [$id]);
+        ', [$id]);
 
         if (count($rows) === 0) {
             return null;
         }
+
         return $this->buildInstitutoRecord((array) $rows[0]);
     }
 
     private function findGrupoById(string $id): ?array
     {
-        $rows = DB::select("
+        $rows = DB::select('
             SELECT g.*, f.nombre as facultad_nombre
             FROM Grupo g
             LEFT JOIN Facultad f ON g.facultad_id = f.id
             WHERE g.id = ? AND g.estado = 4
-        ", [$id]);
+        ', [$id]);
 
         if (count($rows) === 0) {
             return null;
         }
+
         return $this->buildGrupoRecord((array) $rows[0]);
     }
 
@@ -234,7 +322,7 @@ class OrgUnitRepository
     {
         return [
             'header' => [
-                'identifier' => CerifFormatter::toOAIIdentifier(self::ENTITY_TYPE, 'F' . $row['id']),
+                'identifier' => CerifFormatter::toOAIIdentifier(self::ENTITY_TYPE, 'F'.$row['id']),
                 'datestamp' => CerifFormatter::nowISO8601(),
                 'setSpec' => 'orgunits',
             ],
@@ -248,7 +336,7 @@ class OrgUnitRepository
     {
         return [
             'header' => [
-                'identifier' => CerifFormatter::toOAIIdentifier(self::ENTITY_TYPE, 'I' . $row['id']),
+                'identifier' => CerifFormatter::toOAIIdentifier(self::ENTITY_TYPE, 'I'.$row['id']),
                 'datestamp' => CerifFormatter::nowISO8601(),
                 'setSpec' => 'orgunits',
             ],
@@ -262,7 +350,7 @@ class OrgUnitRepository
     {
         return [
             'header' => [
-                'identifier' => CerifFormatter::toOAIIdentifier(self::ENTITY_TYPE, 'G' . $row['id']),
+                'identifier' => CerifFormatter::toOAIIdentifier(self::ENTITY_TYPE, 'G'.$row['id']),
                 'datestamp' => CerifFormatter::toISO8601($row['updated_at'] ?? 'now'),
                 'setSpec' => 'orgunits',
             ],
@@ -275,10 +363,10 @@ class OrgUnitRepository
     private function mapFacultadToCerif(array $row): array
     {
         $orgUnit = [
-            '@id' => CerifFormatter::toCerifId(self::ENTITY_TYPE, 'F' . $row['id']),
+            '@id' => CerifFormatter::toCerifId(self::ENTITY_TYPE, 'F'.$row['id']),
             '@xmlns' => self::NAMESPACE_PERUCRIS_CERIF,
             'name' => CerifFormatter::filterEmpty([CerifFormatter::createTitle($row['nombre'])]),
-            'type' => 'Facultad',
+            'type' => CerifFormatter::ORGUNIT_TYPE_FACULTAD,
             'partOf' => [
                 'orgUnit' => [
                     '@id' => CerifFormatter::toCerifId(self::ENTITY_TYPE, self::UNMSM_ROOT['id']),
@@ -298,10 +386,10 @@ class OrgUnitRepository
     private function mapInstitutoToCerif(array $row): array
     {
         $orgUnit = [
-            '@id' => CerifFormatter::toCerifId(self::ENTITY_TYPE, 'I' . $row['id']),
+            '@id' => CerifFormatter::toCerifId(self::ENTITY_TYPE, 'I'.$row['id']),
             '@xmlns' => self::NAMESPACE_PERUCRIS_CERIF,
             'name' => CerifFormatter::filterEmpty([CerifFormatter::createTitle($row['instituto'])]),
-            'type' => 'Instituto',
+            'type' => CerifFormatter::ORGUNIT_TYPE_INSTITUTO,
             'classifications' => [
                 ['scheme' => 'https://purl.org/pe-repo/inei/ubigeo', 'value' => self::UNMSM_ROOT['ubigeo']],
                 ['scheme' => 'https://purl.org/pe-repo/inei/ciiu', 'value' => self::UNMSM_ROOT['ciiu']],
@@ -312,7 +400,7 @@ class OrgUnitRepository
         if ($row['facultad_id'] ?? null && $row['facultad_nombre'] ?? null) {
             $orgUnit['partOf'] = [
                 'orgUnit' => [
-                    '@id' => CerifFormatter::toCerifId(self::ENTITY_TYPE, 'F' . $row['facultad_id']),
+                    '@id' => CerifFormatter::toCerifId(self::ENTITY_TYPE, 'F'.$row['facultad_id']),
                     'name' => $row['facultad_nombre'],
                 ],
             ];
@@ -324,10 +412,10 @@ class OrgUnitRepository
     private function mapGrupoToCerif(array $row): array
     {
         $orgUnit = [
-            '@id' => CerifFormatter::toCerifId(self::ENTITY_TYPE, 'G' . $row['id']),
+            '@id' => CerifFormatter::toCerifId(self::ENTITY_TYPE, 'G'.$row['id']),
             '@xmlns' => self::NAMESPACE_PERUCRIS_CERIF,
             'name' => CerifFormatter::filterEmpty([CerifFormatter::createTitle($row['grupo_nombre'])]),
-            'type' => 'Grupo de investigacion',
+            'type' => CerifFormatter::ORGUNIT_TYPE_GRUPO_INVESTIGACION,
         ];
 
         if ($row['grupo_nombre_corto'] ?? null) {
@@ -337,7 +425,7 @@ class OrgUnitRepository
         if ($row['facultad_id'] ?? null && $row['facultad_nombre'] ?? null) {
             $orgUnit['partOf'] = [
                 'orgUnit' => [
-                    '@id' => CerifFormatter::toCerifId(self::ENTITY_TYPE, 'F' . $row['facultad_id']),
+                    '@id' => CerifFormatter::toCerifId(self::ENTITY_TYPE, 'F'.$row['facultad_id']),
                     'name' => $row['facultad_nombre'],
                 ],
             ];
@@ -369,7 +457,7 @@ class OrgUnitRepository
             $classifications[] = ['scheme' => self::SCHEME_ORG_TYPE, 'value' => $row['grupo_categoria']];
         }
 
-        $orgUnit['classifications'] = array_values(array_filter($classifications, fn($c) => $c['value'] !== null));
+        $orgUnit['classifications'] = array_values(array_filter($classifications, fn ($c) => $c['value'] !== null));
 
         return $orgUnit;
     }

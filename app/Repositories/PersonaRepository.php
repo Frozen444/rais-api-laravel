@@ -67,6 +67,20 @@ class PersonaRepository
         return (int) ($rows[0]->total ?? 0);
     }
 
+    public function countDeleted(?string $from = null, ?string $until = null): int
+    {
+        $dateFilter = CerifFormatter::buildDateFilter($from, $until, 'ui.updated_at');
+        $query = 'SELECT COUNT(*) as total FROM Usuario_investigador ui WHERE ui.estado = 0';
+
+        if ($dateFilter['clause']) {
+            $query .= ' AND '.$dateFilter['clause'];
+        }
+
+        $rows = DB::select($query, $dateFilter['params']);
+
+        return (int) ($rows[0]->total ?? 0);
+    }
+
     public function getIdentifiers(array $filters): array
     {
         $offset = (int) ($filters['offset'] ?? 0);
@@ -96,6 +110,40 @@ class PersonaRepository
                 'identifier' => CerifFormatter::toOAIIdentifier(self::ENTITY_TYPE, $row->id),
                 'datestamp' => CerifFormatter::toISO8601($row->updated_at) ?? self::FALLBACK_DATE,
                 'setSpec' => 'persons',
+            ];
+        }, $rows);
+    }
+
+    public function getDeletedIdentifiers(array $filters): array
+    {
+        $offset = (int) ($filters['offset'] ?? 0);
+        $limit = (int) ($filters['limit'] ?? 100);
+        $from = $filters['from'] ?? null;
+        $until = $filters['until'] ?? null;
+
+        $dateFilter = CerifFormatter::buildDateFilter($from, $until, 'ui.updated_at');
+
+        $query = '
+            SELECT ui.id, ui.updated_at
+            FROM Usuario_investigador ui
+            WHERE ui.estado = 0
+        ';
+
+        if ($dateFilter['clause']) {
+            $query .= ' AND '.$dateFilter['clause'];
+        }
+
+        $query .= ' ORDER BY ui.id LIMIT ? OFFSET ?';
+
+        $params = [...$dateFilter['params'], $limit, $offset];
+        $rows = DB::select($query, $params);
+
+        return array_map(function ($row) {
+            return [
+                'identifier' => CerifFormatter::toOAIIdentifier(self::ENTITY_TYPE, $row->id),
+                'datestamp' => CerifFormatter::toISO8601($row->updated_at) ?? self::FALLBACK_DATE,
+                'setSpec' => 'persons',
+                'status' => 'deleted',
             ];
         }, $rows);
     }

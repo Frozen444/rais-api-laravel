@@ -100,20 +100,53 @@ class ListRecordsHandler
             throw OaiException::noSetHierarchy("Set '{$set}' not supported");
         }
 
+        $activeCount = $repository['count']($from, $until);
+        $deletedCount = $repository['deletedCount']($from, $until);
+
         if ($completeListSize === null) {
-            $completeListSize = $repository['count']($from, $until);
+            $completeListSize = $activeCount + $deletedCount;
         }
 
         if ($completeListSize === 0) {
             throw OaiException::noRecordsMatch('No records match the request criteria');
         }
 
-        $records = $repository['records']([
-            'from' => $from,
-            'until' => $until,
-            'offset' => $cursor,
-            'limit' => $this->tokenService->getPageSize(),
-        ]);
+        $pageSize = $this->tokenService->getPageSize();
+
+        if ($cursor < $activeCount) {
+            $activeRecords = $repository['records']([
+                'from' => $from,
+                'until' => $until,
+                'offset' => $cursor,
+                'limit' => $pageSize,
+            ]);
+
+            $remaining = max(0, $pageSize - count($activeRecords));
+            $deletedHeaders = $remaining > 0
+                ? $repository['deletedIdentifiers']([
+                    'from' => $from,
+                    'until' => $until,
+                    'offset' => 0,
+                    'limit' => $remaining,
+                ])
+                : [];
+        } else {
+            $activeRecords = [];
+            $deletedHeaders = $repository['deletedIdentifiers']([
+                'from' => $from,
+                'until' => $until,
+                'offset' => $cursor - $activeCount,
+                'limit' => $pageSize,
+            ]);
+        }
+
+        $deletedRecords = array_map(function ($header) {
+            return [
+                'header' => $header,
+            ];
+        }, $deletedHeaders);
+
+        $records = [...$activeRecords, ...$deletedRecords];
 
         $response = [
             'record' => $records,
@@ -150,30 +183,44 @@ class ListRecordsHandler
             'persons' => [
                 'count' => fn (?string $from, ?string $until): int => $this->personaRepository->countAll($from, $until),
                 'records' => fn (array $filters): array => $this->personaRepository->findAll($filters),
+                'deletedCount' => fn (?string $from, ?string $until): int => $this->personaRepository->countDeleted($from, $until),
+                'deletedIdentifiers' => fn (array $filters): array => $this->personaRepository->getDeletedIdentifiers($filters),
             ],
             'orgunits' => [
                 'count' => fn (?string $from, ?string $until): int => $this->orgUnitRepository->countAll($from, $until),
                 'records' => fn (array $filters): array => $this->orgUnitRepository->findAll($filters),
+                'deletedCount' => fn (?string $from, ?string $until): int => $this->orgUnitRepository->countDeleted($from, $until),
+                'deletedIdentifiers' => fn (array $filters): array => $this->orgUnitRepository->getDeletedIdentifiers($filters),
             ],
             'publications' => [
                 'count' => fn (?string $from, ?string $until): int => $this->publicacionRepository->countAll($from, $until),
                 'records' => fn (array $filters): array => $this->publicacionRepository->findAll($filters),
+                'deletedCount' => fn (?string $from, ?string $until): int => $this->publicacionRepository->countDeleted($from, $until),
+                'deletedIdentifiers' => fn (array $filters): array => $this->publicacionRepository->getDeletedIdentifiers($filters),
             ],
             'projects' => [
                 'count' => fn (?string $from, ?string $until): int => $this->proyectoRepository->countAll($from, $until),
                 'records' => fn (array $filters): array => $this->proyectoRepository->findAll($filters),
+                'deletedCount' => fn (?string $from, ?string $until): int => $this->proyectoRepository->countDeleted($from, $until),
+                'deletedIdentifiers' => fn (array $filters): array => $this->proyectoRepository->getDeletedIdentifiers($filters),
             ],
             'patents' => [
                 'count' => fn (?string $from, ?string $until): int => $this->patenteRepository->countAll($from, $until),
                 'records' => fn (array $filters): array => $this->patenteRepository->findAll($filters),
+                'deletedCount' => fn (?string $from, ?string $until): int => $this->patenteRepository->countDeleted($from, $until),
+                'deletedIdentifiers' => fn (array $filters): array => $this->patenteRepository->getDeletedIdentifiers($filters),
             ],
             'fundings' => [
                 'count' => fn (?string $from, ?string $until): int => $this->fundingRepository->countAll($from, $until),
                 'records' => fn (array $filters): array => $this->fundingRepository->findAll($filters),
+                'deletedCount' => fn (?string $from, ?string $until): int => 0,
+                'deletedIdentifiers' => fn (array $filters): array => [],
             ],
             'equipments' => [
                 'count' => fn (?string $from, ?string $until): int => $this->equipmentRepository->countAll($from, $until),
                 'records' => fn (array $filters): array => $this->equipmentRepository->findAll($filters),
+                'deletedCount' => fn (?string $from, ?string $until): int => 0,
+                'deletedIdentifiers' => fn (array $filters): array => [],
             ],
         ];
     }

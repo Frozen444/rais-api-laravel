@@ -96,6 +96,20 @@ class ProyectoRepository
         return (int) ($rows[0]->total ?? 0);
     }
 
+    public function countDeleted(?string $from = null, ?string $until = null): int
+    {
+        $dateFilter = CerifFormatter::buildDateFilter($from, $until, 'p.updated_at');
+        $query = 'SELECT COUNT(*) as total FROM Proyecto p WHERE p.estado = 0';
+
+        if ($dateFilter['clause']) {
+            $query .= ' AND '.$dateFilter['clause'];
+        }
+
+        $rows = DB::select($query, $dateFilter['params']);
+
+        return (int) ($rows[0]->total ?? 0);
+    }
+
     public function getIdentifiers(array $filters): array
     {
         $offset = (int) ($filters['offset'] ?? 0);
@@ -125,6 +139,40 @@ class ProyectoRepository
                 'identifier' => CerifFormatter::toOAIIdentifier(self::ENTITY_TYPE, $row->id),
                 'datestamp' => CerifFormatter::toISO8601($row->updated_at) ?? self::FALLBACK_DATE,
                 'setSpec' => 'projects',
+            ];
+        }, $rows);
+    }
+
+    public function getDeletedIdentifiers(array $filters): array
+    {
+        $offset = (int) ($filters['offset'] ?? 0);
+        $limit = (int) ($filters['limit'] ?? 100);
+        $from = $filters['from'] ?? null;
+        $until = $filters['until'] ?? null;
+
+        $dateFilter = CerifFormatter::buildDateFilter($from, $until, 'p.updated_at');
+
+        $query = '
+            SELECT p.id, p.updated_at
+            FROM Proyecto p
+            WHERE p.estado = 0
+        ';
+
+        if ($dateFilter['clause']) {
+            $query .= ' AND '.$dateFilter['clause'];
+        }
+
+        $query .= ' ORDER BY p.id LIMIT ? OFFSET ?';
+
+        $params = [...$dateFilter['params'], $limit, $offset];
+        $rows = DB::select($query, $params);
+
+        return array_map(function ($row) {
+            return [
+                'identifier' => CerifFormatter::toOAIIdentifier(self::ENTITY_TYPE, $row->id),
+                'datestamp' => CerifFormatter::toISO8601($row->updated_at) ?? self::FALLBACK_DATE,
+                'setSpec' => 'projects',
+                'status' => 'deleted',
             ];
         }, $rows);
     }
@@ -203,11 +251,15 @@ class ProyectoRepository
             'lastModified' => CerifFormatter::toISO8601($row['updated_at'] ?? null) ?? self::FALLBACK_DATE,
         ];
 
-        if (! empty($row['codigo_proyecto'])) {
-            $project['identifiers'] = CerifFormatter::filterEmpty([
-                CerifFormatter::createIdentifier(self::SCHEME_PROJECT_REFERENCE, $row['codigo_proyecto']),
-            ]);
+        $projectReference = trim((string) ($row['codigo_proyecto'] ?? ''));
+        if ($projectReference === '') {
+            $projectReference = 'P-'.$row['id'];
         }
+
+        $project['identifiers'] = [[
+            'scheme' => self::SCHEME_PROJECT_REFERENCE,
+            'value' => $projectReference,
+        ]];
 
         $types = $this->getProjectTypes($row);
         if (count($types) > 0) {
@@ -304,9 +356,30 @@ class ProyectoRepository
             }
         }
 
-        if (count($participantItems) > 0) {
-            $project['participants'] = $participantItems;
+        $hasPersonParticipant = false;
+        foreach ($participantItems as $item) {
+            if (! empty($item['person'])) {
+                $hasPersonParticipant = true;
+                break;
+            }
         }
+
+        if (! $hasPersonParticipant) {
+            $responsable = $this->getResponsibleParticipant((int) $row['id']);
+
+            if ($responsable !== null) {
+                $participantItems[] = $responsable;
+            } else {
+                $participantItems[] = [
+                    'person' => [
+                        'name' => 'Investigador responsable no especificado',
+                    ],
+                    'role' => 'Responsable',
+                ];
+            }
+        }
+
+        $project['participants'] = $participantItems;
 
         if ($this->hasFundingData($row)) {
             $project['fundings'] = [[
@@ -480,6 +553,92 @@ class ProyectoRepository
         $rawRole = trim((string) ($integrante['tipo_nombre'] ?? $integrante['condicion'] ?? ''));
 
         return $rawRole !== '' ? $rawRole : 'Participante';
+    }
+
+    private function getResponsibleParticipant(int $projectId): ?array
+    {
+        $rows = DB::select(
+            '
+                SELECT
+                    pi.investigador_id,
+                    ui.nombres,
+                    ui.apellido1,
+                    ui.apellido2,
+                    pit.nombre as tipo_nombre,
+                    pi.condicion
+                FROM Proyecto_integrante pi
+                LEFT JOIN Usuario_investigador ui ON pi.investigador_id = ui.id
+                LEFT JOIN Proyecto_integrante_tipo pit ON pi.proyecto_integrante_tipo_id = pit.id
+                WHERE pi.proyecto_id = ?
+                  AND IFNULL(pi.estado, 1) = 1
+                ORDER BY
+                    CASE
+                        WHEN LOWER(IFNULL(pit.nombre, \'\')) LIKE \'%principal%\' THEN 0
+                        WHEN LOWER(IFNULL(pi.condicion, \'\')) LIKE \'%principal%\' THEN 0
+                        WHEN LOWER(IFNULL(pit.nombre, \'\')) LIKE \'%responsable%\' THEN 1
+                        WHEN LOWER(IFNULL(pi.condicion, \'\')) LIKE \'%responsable%\' THEN 1
+                        ELSE 2
+                    END,
+                    pi.id
+                LIMIT 1
+            ',
+            [$projectId]
+        );
+
+        if (count($rows) === 0) {
+            try {
+                $fallbackRows = DB::select(
+                    '
+                        SELECT
+                            p.investigador_id,
+                            ui.nombres,
+                            ui.apellido1,
+                            ui.apellido2
+                        FROM Proyecto p
+                        LEFT JOIN Usuario_investigador ui ON p.investigador_id = ui.id
+                        WHERE p.id = ?
+                          AND p.investigador_id IS NOT NULL
+                        LIMIT 1
+                    ',
+                    [$projectId]
+                );
+
+                if (count($fallbackRows) === 0) {
+                    return null;
+                }
+
+                $row = (array) $fallbackRows[0];
+            } catch (\Throwable) {
+                return null;
+            }
+        } else {
+            $row = (array) $rows[0];
+        }
+
+        $fullName = trim(implode(' ', array_filter([
+            $row['nombres'] ?? null,
+            $row['apellido1'] ?? null,
+            $row['apellido2'] ?? null,
+        ])));
+
+        if ($fullName === '') {
+            $fullName = ! empty($row['investigador_id'])
+                ? 'Investigador '.$row['investigador_id']
+                : 'Investigador responsable';
+        }
+
+        $participant = [
+            'person' => [
+                'name' => $fullName,
+            ],
+            'role' => 'Responsable',
+        ];
+
+        if (! empty($row['investigador_id'])) {
+            $participant['person']['id'] = CerifFormatter::toCerifId('Persons', $row['investigador_id']);
+        }
+
+        return $participant;
     }
 
     private function getProjectTypes(array $row): array

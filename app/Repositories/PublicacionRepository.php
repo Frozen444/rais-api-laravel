@@ -62,6 +62,25 @@ class PublicacionRepository
         return (int) ($rows[0]->total ?? 0);
     }
 
+    public function countDeleted(?string $from = null, ?string $until = null): int
+    {
+        $dateFilter = CerifFormatter::buildDateFilter($from, $until, 'p.updated_at');
+
+        $query = '
+            SELECT COUNT(*) as total
+            FROM Publicacion p
+            WHERE p.estado = 0
+        ';
+
+        if ($dateFilter['clause']) {
+            $query .= ' AND '.$dateFilter['clause'];
+        }
+
+        $rows = DB::select($query, $dateFilter['params']);
+
+        return (int) ($rows[0]->total ?? 0);
+    }
+
     public function getIdentifiers(array $filters): array
     {
         $offset = (int) ($filters['offset'] ?? 0);
@@ -92,6 +111,40 @@ class PublicacionRepository
                 'identifier' => CerifFormatter::toOAIIdentifier(self::ENTITY_TYPE, $row->id),
                 'datestamp' => CerifFormatter::toISO8601($row->updated_at) ?? self::FALLBACK_DATE,
                 'setSpec' => 'publications',
+            ];
+        }, $rows);
+    }
+
+    public function getDeletedIdentifiers(array $filters): array
+    {
+        $offset = (int) ($filters['offset'] ?? 0);
+        $limit = (int) ($filters['limit'] ?? 100);
+        $from = $filters['from'] ?? null;
+        $until = $filters['until'] ?? null;
+
+        $dateFilter = CerifFormatter::buildDateFilter($from, $until, 'p.updated_at');
+
+        $query = '
+            SELECT p.id, p.updated_at
+            FROM Publicacion p
+            WHERE p.estado = 0
+        ';
+
+        if ($dateFilter['clause']) {
+            $query .= ' AND '.$dateFilter['clause'];
+        }
+
+        $query .= ' ORDER BY p.id LIMIT ? OFFSET ?';
+
+        $params = [...$dateFilter['params'], $limit, $offset];
+        $rows = DB::select($query, $params);
+
+        return array_map(function ($row) {
+            return [
+                'identifier' => CerifFormatter::toOAIIdentifier(self::ENTITY_TYPE, $row->id),
+                'datestamp' => CerifFormatter::toISO8601($row->updated_at) ?? self::FALLBACK_DATE,
+                'setSpec' => 'publications',
+                'status' => 'deleted',
             ];
         }, $rows);
     }
